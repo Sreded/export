@@ -139,7 +139,7 @@
         renderDatabaseDetails();
         throw new Error("No likely journal-entry table was recognized. Open Database details below after dismissing this message, or inspect the console for the discovered schema.");
       }
-      state.entries = loadEntries(state.db, state.detected);
+      state.entries = loadEntries(state.db, state.detected, state.schema);
       state.entries.forEach(function (entry, index) { entry._index = index; });
       console.info("Diarium Reader schema:", state.schema, "Selected:", state.detected);
       showReader();
@@ -228,15 +228,17 @@
     return best;
   }
 
-  function loadEntries(db, detectedSchema) {
+  function loadEntries(db, detectedSchema, schema) {
     const result = db.exec("SELECT * FROM " + quoteIdentifier(detectedSchema.table));
     if (!result.length) return [];
     const columns = result[0].columns;
-    return result[0].values.map(function (values) {
+    const entries = result[0].values.map(function (values) {
       const row = {};
       columns.forEach(function (column, index) { row[column] = values[index]; });
       return normalizeEntry(row, detectedSchema.fields);
     });
+    addRelatedTags(db, schema, detectedSchema, entries);
+    return entries;
   }
 
   function normalizeEntry(row, fields) {
@@ -251,11 +253,47 @@
     });
     return {
       title: title, text: text, date: dateInfo.date, rawDate: dateInfo.raw,
+      sourceId: fields.date ? String(row[fields.date]) : "",
       rating: cleanValue(fields.rating ? row[fields.rating] : ""),
       tags: cleanValue(fields.tags ? row[fields.tags] : ""),
       people: cleanValue(fields.people ? row[fields.people] : ""),
       location: cleanValue(fields.location ? row[fields.location] : ""), metadata: metadata
     };
+  }
+
+  function addRelatedTags(db, schema, detectedSchema, entries) {
+    const entryTagsTable = schema.find(function (table) { return normalizedName(table.name) === "entrytags"; });
+    const tagsTable = schema.find(function (table) { return normalizedName(table.name) === "tags"; });
+    if (!entryTagsTable || !tagsTable || !detectedSchema.fields.date) return;
+
+    const linkEntryId = findExactColumn(entryTagsTable.columns, ["diaryentryid", "entryid"]);
+    const linkTagId = findExactColumn(entryTagsTable.columns, ["diarytagid", "tagid"]);
+    const tagId = findExactColumn(tagsTable.columns, ["diarytagid", "tagid", "id"]);
+    const tagValue = findExactColumn(tagsTable.columns, ["value", "name", "title", "tag"]);
+    if (!linkEntryId || !linkTagId || !tagId || !tagValue) return;
+
+    const sql = "SELECT et." + quoteIdentifier(linkEntryId) + " AS entry_id, t." + quoteIdentifier(tagValue) +
+      " AS tag_value FROM " + quoteIdentifier(entryTagsTable.name) + " AS et JOIN " + quoteIdentifier(tagsTable.name) +
+      " AS t ON et." + quoteIdentifier(linkTagId) + " = t." + quoteIdentifier(tagId) + " ORDER BY et.rowid";
+    const result = db.exec(sql);
+    if (!result.length) return;
+    const tagsByEntry = new Map();
+    result[0].values.forEach(function (row) {
+      const key = String(row[0]);
+      const value = cleanValue(row[1]);
+      if (!value) return;
+      if (!tagsByEntry.has(key)) tagsByEntry.set(key, []);
+      if (!tagsByEntry.get(key).includes(value)) tagsByEntry.get(key).push(value);
+    });
+    entries.forEach(function (entry) {
+      const related = tagsByEntry.get(entry.sourceId) || [];
+      if (related.length) entry.tags = related.join(", ");
+    });
+  }
+
+  function findExactColumn(columns, names) {
+    const column = columns.find(function (item) { return names.includes(normalizedName(item.name)); });
+    return column ? column.name : null;
   }
 
   function cleanValue(value) {
@@ -399,7 +437,6 @@
     return entries.map(function (entry) {
       const lines = [formatDate(entry)];
       if (entry.title) lines.push(entry.title);
-      if (entry.rating) lines.push("Mood / rating: " + entry.rating);
       if (entry.tags) lines.push("Tags: " + entry.tags);
       if (entry.people) lines.push("People: " + entry.people);
       if (entry.location) lines.push("Location: " + entry.location);
@@ -469,7 +506,7 @@
   function makeChips(entry) {
     const container = document.createElement("div");
     container.className = "chips";
-    [[entry.rating, "Mood / rating: "], [entry.tags, "Tags: "]].forEach(function (item) {
+    [[entry.tags, "Tags: "]].forEach(function (item) {
       if (item[0]) appendTextElement(container, "span", "chip", item[1] + item[0]);
     });
     return container;
@@ -487,7 +524,6 @@
     els.detailTitle.textContent = entry.title || "Journal entry";
     els.detailBody.textContent = entry.text || "No text content was found for this entry.";
     els.detailMetadata.replaceChildren();
-    addMetadata("Mood / rating", entry.rating);
     addMetadata("Tags", entry.tags);
     addMetadata("People", entry.people);
     addMetadata("Location", entry.location);
