@@ -194,7 +194,7 @@
       if (!matches.date && /entr|diar|journal/i.test(table.name)) {
         const tickColumn = table.columns.find(function (column) {
           const name = normalizedName(column.name);
-          return (column.primaryKey && (name === "id" || name === "entryid")) || name === "entryid" || name === "datetimeid";
+          return (column.primaryKey && (name === "id" || name.endsWith("entryid"))) || name.endsWith("entryid") || name === "datetimeid";
         });
         if (tickColumn) matches.date = tickColumn.name;
       }
