@@ -42,6 +42,7 @@
       fileInput: byId("fileInput"), openFileButton: byId("openFileButton"), changeFileButton: byId("changeFileButton"),
       tryAgainButton: byId("tryAgainButton"), dropZone: byId("dropZone"), searchInput: byId("searchInput"),
       sortSelect: byId("sortSelect"), entryCount: byId("entryCount"), fileLabel: byId("fileLabel"),
+      dateFromInput: byId("dateFromInput"), dateToInput: byId("dateToInput"), clearDateFilterButton: byId("clearDateFilterButton"),
       entriesList: byId("entriesList"), emptyState: byId("emptyState"), emptyTitle: byId("emptyTitle"),
       emptyMessage: byId("emptyMessage"), databaseDetailsContent: byId("databaseDetailsContent"),
       detailOverlay: byId("detailOverlay"), detailDate: byId("detailDate"), detailTitle: byId("detailTitle"),
@@ -57,6 +58,9 @@
     els.fileInput.addEventListener("change", function () { if (this.files[0]) openDiaryFile(this.files[0]); });
     els.searchInput.addEventListener("input", renderEntries);
     els.sortSelect.addEventListener("change", renderEntries);
+    els.dateFromInput.addEventListener("input", renderEntries);
+    els.dateToInput.addEventListener("input", renderEntries);
+    els.clearDateFilterButton.addEventListener("click", function () { els.dateFromInput.value = ""; els.dateToInput.value = ""; renderEntries(); });
     els.closeDetailButton.addEventListener("click", closeDetail);
     els.plainTextButton.addEventListener("click", openTextOutput);
     els.closeTextOutputButton.addEventListener("click", closeTextOutput);
@@ -360,6 +364,10 @@
         const possible = new Date(candidate);
         if (isPlausibleDate(possible)) { date = possible; break; }
       }
+    } else if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+      const parts = raw.split("-").map(Number);
+      const possible = new Date(parts[0], parts[1] - 1, parts[2]);
+      if (isPlausibleDate(possible) && possible.getFullYear() === parts[0] && possible.getMonth() === parts[1] - 1 && possible.getDate() === parts[2]) date = possible;
     } else {
       const normalized = raw.replace(" ", "T").replace(/(\.\d{3})\d+/, "$1");
       const possible = new Date(normalized);
@@ -393,34 +401,49 @@
     els.readerPanel.hidden = false;
     els.changeFileButton.hidden = false;
     els.searchInput.value = "";
+    els.dateFromInput.value = "";
+    els.dateToInput.value = "";
     els.fileLabel.textContent = state.file.name;
     renderDatabaseDetails();
     renderEntries();
   }
 
   function renderEntries() {
-    const query = els.searchInput.value.trim().toLocaleLowerCase();
-    const filtered = state.entries.filter(function (entry) {
-      return !query || (entry.title + "\n" + entry.text).toLocaleLowerCase().includes(query);
-    }).slice();
+    const filtered = getVisibleEntries();
     filtered.sort(compareEntries);
     els.entriesList.replaceChildren();
     filtered.forEach(function (entry) { els.entriesList.appendChild(createEntryCard(entry)); });
-    els.entryCount.textContent = query ? filtered.length + " of " + state.entries.length + " entries" : state.entries.length + (state.entries.length === 1 ? " entry" : " entries");
+    const filtering = hasActiveFilters();
+    els.entryCount.textContent = filtering ? filtered.length + " of " + state.entries.length + " entries" : state.entries.length + (state.entries.length === 1 ? " entry" : " entries");
     els.emptyState.hidden = filtered.length !== 0;
     if (filtered.length === 0) {
-      els.emptyTitle.textContent = query ? "No matching entries" : "No journal entries found";
-      els.emptyMessage.textContent = query ? "Try a different word or phrase." : "This backup did not contain recognizable journal entries.";
+      els.emptyTitle.textContent = filtering ? "No matching entries" : "No journal entries found";
+      els.emptyMessage.textContent = filtering ? "Try changing your search or date range." : "This backup did not contain recognizable journal entries.";
     }
   }
 
   function getVisibleEntries() {
     const query = els.searchInput.value.trim().toLocaleLowerCase();
+    const from = els.dateFromInput.value ? dateInputDay(els.dateFromInput.value) : null;
+    const to = els.dateToInput.value ? dateInputDay(els.dateToInput.value) : null;
     const entries = state.entries.filter(function (entry) {
-      return !query || (entry.title + "\n" + entry.text).toLocaleLowerCase().includes(query);
+      if (query && !(entry.title + "\n" + entry.text).toLocaleLowerCase().includes(query)) return false;
+      if (!from && !to) return true;
+      if (!entry.date) return false;
+      const day = Date.UTC(entry.date.getFullYear(), entry.date.getMonth(), entry.date.getDate());
+      return (!from || day >= from) && (!to || day <= to);
     }).slice();
     entries.sort(compareEntries);
     return entries;
+  }
+
+  function dateInputDay(value) {
+    const parts = value.split("-").map(Number);
+    return Date.UTC(parts[0], parts[1] - 1, parts[2]);
+  }
+
+  function hasActiveFilters() {
+    return Boolean(els.searchInput.value.trim() || els.dateFromInput.value || els.dateToInput.value);
   }
 
   function compareEntries(a, b) {
