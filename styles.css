@@ -66,7 +66,8 @@ h1 { margin: 1px 0 0; font-family: ui-serif, Georgia, serif; font-size: clamp(1.
 .plain-text-button:hover { background: var(--accent-dark); }
 .date-filters { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: end; gap: 8px; padding: 11px 13px; background: var(--surface); border: 1px solid var(--line); border-radius: 15px; }
 .date-filters label { display: grid; gap: 3px; color: var(--muted); font-size: .76rem; font-weight: 700; }
-.date-filters input { min-width: 0; height: 36px; padding: 0 8px; border: 1px solid var(--line); border-radius: 9px; background: var(--bg); color: var(--text); }
+.date-filters input, .date-filters select { min-width: 0; max-width: 100%; height: 36px; padding: 0 8px; border: 1px solid var(--line); border-radius: 9px; background: var(--bg); color: var(--text); }
+.tag-filter { flex: 1 1 130px; min-width: 0; }
 .clear-date-button { min-height: 36px; padding: 0 10px; border: 0; border-radius: 9px; background: var(--accent-soft); color: var(--accent-dark); font-size: .8rem; font-weight: 750; }
 .results-heading { display: flex; align-items: end; justify-content: space-between; gap: 14px; margin: 22px 2px 13px; }
 .results-heading h2 { margin: 0; font-family: ui-serif, Georgia, serif; font-size: 1.45rem; }
