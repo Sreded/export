@@ -62,6 +62,7 @@
         <div class="date-filters" role="group" aria-label="Filter entries by date">
           <label>From <input id="dateFromInput" type="date" aria-label="Start date"></label>
           <label>To <input id="dateToInput" type="date" aria-label="End date"></label>
+          <label class="tag-filter">Tag <select id="tagSelect"><option value="">All tags</option></select></label>
           <button id="clearDateFilterButton" class="clear-date-button" type="button">Clear dates</button>
         </div>
       </div>
@@ -112,7 +113,7 @@
         <div><p class="detail-date">Portable journal text</p><h2 id="textOutputTitle">Plain-text output</h2></div>
         <button id="closeTextOutputButton" class="icon-button" type="button" aria-label="Close plain-text output">×</button>
       </header>
-      <p class="output-help">This includes the entries currently matching your search, in the selected sort order.</p>
+      <p class="output-help">This includes the entries matching your search, date range, and tag filter, in the selected sort order.</p>
       <button id="copyTextButton" class="primary-button copy-button" type="button">Copy all text</button>
       <p id="copyStatus" class="copy-status" role="status" aria-live="polite"></p>
       <textarea id="textOutput" class="text-output" readonly spellcheck="false" aria-label="Plain-text journal output"></textarea>
