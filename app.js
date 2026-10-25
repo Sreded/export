@@ -13,7 +13,7 @@
   ];
 
   const FIELD_HINTS = {
-    date: ["date", "datetime", "timestamp", "created", "modified", "time", "entrydate", "day"],
+    date: ["entrydate", "journaldate", "diarydate", "day", "date", "datetime"],
     title: ["title", "heading", "subject", "name"],
     text: ["text", "content", "body", "notes", "note", "description", "entry"],
     rating: ["rating", "mood", "score", "emotion"],
@@ -43,6 +43,7 @@
       tryAgainButton: byId("tryAgainButton"), dropZone: byId("dropZone"), searchInput: byId("searchInput"),
       sortSelect: byId("sortSelect"), entryCount: byId("entryCount"), fileLabel: byId("fileLabel"),
       dateFromInput: byId("dateFromInput"), dateToInput: byId("dateToInput"), clearDateFilterButton: byId("clearDateFilterButton"),
+      tagSelect: byId("tagSelect"),
       entriesList: byId("entriesList"), emptyState: byId("emptyState"), emptyTitle: byId("emptyTitle"),
       emptyMessage: byId("emptyMessage"), databaseDetailsContent: byId("databaseDetailsContent"),
       detailOverlay: byId("detailOverlay"), detailDate: byId("detailDate"), detailTitle: byId("detailTitle"),
@@ -58,6 +59,7 @@
     els.fileInput.addEventListener("change", function () { if (this.files[0]) openDiaryFile(this.files[0]); });
     els.searchInput.addEventListener("input", renderEntries);
     els.sortSelect.addEventListener("change", renderEntries);
+    els.tagSelect.addEventListener("change", renderEntries);
     els.dateFromInput.addEventListener("input", renderEntries);
     els.dateToInput.addEventListener("input", renderEntries);
     els.clearDateFilterButton.addEventListener("click", function () { els.dateFromInput.value = ""; els.dateToInput.value = ""; renderEntries(); });
@@ -195,10 +197,16 @@
       Object.keys(FIELD_HINTS).forEach(function (group) {
         matches[group] = findMatchingColumn(table.columns, FIELD_HINTS[group]);
       });
+      // Creation and modification timestamps describe editing, not the journal day.
+      matches.date = findMatchingColumn(table.columns.filter(function (column) {
+        return !/creat|modif|updat|sync/i.test(column.name);
+      }), FIELD_HINTS.date);
+      matches.id = findExactColumn(table.columns, ["diaryentryid", "entryid", "id"]) ||
+        (table.columns.find(function (column) { return column.primaryKey; }) || {}).name;
       if (!matches.date && /entr|diar|journal/i.test(table.name)) {
         const tickColumn = table.columns.find(function (column) {
           const name = normalizedName(column.name);
-          return (column.primaryKey && (name === "id" || name.endsWith("entryid"))) || name.endsWith("entryid") || name === "datetimeid";
+          return name === "diaryentryid" || name === "datetimeid";
         });
         if (tickColumn) matches.date = tickColumn.name;
       }
@@ -233,7 +241,13 @@
   }
 
   function loadEntries(db, detectedSchema, schema) {
-    const result = db.exec("SELECT * FROM " + quoteIdentifier(detectedSchema.table));
+    // Preserve all digits of tick dates and foreign keys before sql.js converts integers to JS numbers.
+    const selection = detectedSchema.columns.map(function (column) {
+      const name = quoteIdentifier(column.name);
+      return /int/i.test(column.type) && (column.name === detectedSchema.fields.date || column.name === detectedSchema.fields.id) ?
+        "CAST(" + name + " AS TEXT) AS " + name : name;
+    }).join(", ");
+    const result = db.exec("SELECT " + selection + " FROM " + quoteIdentifier(detectedSchema.table));
     if (!result.length) return [];
     const columns = result[0].columns;
     const entries = result[0].values.map(function (values) {
@@ -250,6 +264,7 @@
     const dateInfo = parseFlexibleDate(fields.date ? row[fields.date] : null);
     const text = toPlainText(cleanValue(fields.text ? row[fields.text] : ""));
     const title = toPlainText(cleanValue(fields.title ? row[fields.title] : ""));
+    const tagList = cleanValue(fields.tags ? row[fields.tags] : "").split(/[,;\n]/).map(function (tag) { return tag.trim(); }).filter(Boolean);
     const metadata = {};
     Object.keys(row).forEach(function (key) {
       const value = cleanValue(row[key]);
@@ -257,9 +272,9 @@
     });
     return {
       title: title, text: text, date: dateInfo.date, rawDate: dateInfo.raw,
-      sourceId: fields.date ? String(row[fields.date]) : "",
+      sourceId: fields.id ? String(row[fields.id]) : "",
       rating: cleanValue(fields.rating ? row[fields.rating] : ""),
-      tags: cleanValue(fields.tags ? row[fields.tags] : ""),
+      tags: tagList.join(", "), tagList: tagList,
       people: cleanValue(fields.people ? row[fields.people] : ""),
       location: cleanValue(fields.location ? row[fields.location] : ""), metadata: metadata
     };
@@ -268,7 +283,7 @@
   function addRelatedTags(db, schema, detectedSchema, entries) {
     const entryTagsTable = schema.find(function (table) { return normalizedName(table.name) === "entrytags"; });
     const tagsTable = schema.find(function (table) { return normalizedName(table.name) === "tags"; });
-    if (!entryTagsTable || !tagsTable || !detectedSchema.fields.date) return;
+    if (!entryTagsTable || !tagsTable || !detectedSchema.fields.id) return;
 
     const linkEntryId = findExactColumn(entryTagsTable.columns, ["diaryentryid", "entryid"]);
     const linkTagId = findExactColumn(entryTagsTable.columns, ["diarytagid", "tagid"]);
@@ -276,7 +291,7 @@
     const tagValue = findExactColumn(tagsTable.columns, ["value", "name", "title", "tag"]);
     if (!linkEntryId || !linkTagId || !tagId || !tagValue) return;
 
-    const sql = "SELECT et." + quoteIdentifier(linkEntryId) + " AS entry_id, t." + quoteIdentifier(tagValue) +
+    const sql = "SELECT CAST(et." + quoteIdentifier(linkEntryId) + " AS TEXT) AS entry_id, t." + quoteIdentifier(tagValue) +
       " AS tag_value FROM " + quoteIdentifier(entryTagsTable.name) + " AS et JOIN " + quoteIdentifier(tagsTable.name) +
       " AS t ON et." + quoteIdentifier(linkTagId) + " = t." + quoteIdentifier(tagId) + " ORDER BY et.rowid";
     const result = db.exec(sql);
@@ -291,7 +306,8 @@
     });
     entries.forEach(function (entry) {
       const related = tagsByEntry.get(entry.sourceId) || [];
-      if (related.length) entry.tags = related.join(", ");
+      entry.tagList = Array.from(new Set(entry.tagList.concat(related)));
+      entry.tags = entry.tagList.join(", ");
     });
   }
 
@@ -334,17 +350,14 @@
       const year = Number(raw.slice(0, 4));
       const month = Number(raw.slice(4, 6)) - 1;
       const day = Number(raw.slice(6, 8));
-      const hour = raw.length > 8 ? Number(raw.slice(8, 10)) : 0;
-      const minute = raw.length > 8 ? Number(raw.slice(10, 12)) : 0;
-      const second = raw.length > 8 ? Number(raw.slice(12, 14)) : 0;
-      const possible = new Date(year, month, day, hour, minute, second);
-      if (isPlausibleDate(possible) && possible.getFullYear() === year && possible.getMonth() === month && possible.getDate() === day) date = possible;
+      const possible = new Date(Date.UTC(year, month, day));
+      if (isPlausibleDate(possible) && possible.getUTCFullYear() === year && possible.getUTCMonth() === month && possible.getUTCDate() === day) date = possible;
     } else if (typeof value === "number" || /^-?\d+(?:\.\d+)?$/.test(raw)) {
       const number = Number(value);
       const candidates = [];
       if (Number.isFinite(number)) {
         if (number >= 1e17) {
-          candidates.push((number - 621355968000000000) / 10000);
+          candidates.push(/^\d+$/.test(raw) ? Number((BigInt(raw) - 621355968000000000n) / 10000n) : (number - 621355968000000000) / 10000);
           candidates.push((number - 116444736000000000) / 10000);
           candidates.push(number / 1000000);
         } else if (number >= 1e14) {
@@ -364,15 +377,18 @@
         const possible = new Date(candidate);
         if (isPlausibleDate(possible)) { date = possible; break; }
       }
-    } else if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
-      const parts = raw.split("-").map(Number);
-      const possible = new Date(parts[0], parts[1] - 1, parts[2]);
-      if (isPlausibleDate(possible) && possible.getFullYear() === parts[0] && possible.getMonth() === parts[1] - 1 && possible.getDate() === parts[2]) date = possible;
+    } else if (/^\d{4}-\d{2}-\d{2}(?:$|[T ])/.test(raw)) {
+      // Keep the designated calendar day, even when the value includes a time or offset.
+      const parts = raw.slice(0, 10).split("-").map(Number);
+      const possible = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+      if (isPlausibleDate(possible) && possible.getUTCFullYear() === parts[0] && possible.getUTCMonth() === parts[1] - 1 && possible.getUTCDate() === parts[2]) date = possible;
     } else {
       const normalized = raw.replace(" ", "T").replace(/(\.\d{3})\d+/, "$1");
       const possible = new Date(normalized);
       if (isPlausibleDate(possible)) date = possible;
     }
+    // UTC midnight is a calendar-day representation; display and filtering must also use UTC.
+    if (date) date = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
     return { date: date, raw: raw };
   }
 
@@ -403,6 +419,7 @@
     els.searchInput.value = "";
     els.dateFromInput.value = "";
     els.dateToInput.value = "";
+    populateTagFilter();
     els.fileLabel.textContent = state.file.name;
     renderDatabaseDetails();
     renderEntries();
@@ -410,7 +427,6 @@
 
   function renderEntries() {
     const filtered = getVisibleEntries();
-    filtered.sort(compareEntries);
     els.entriesList.replaceChildren();
     filtered.forEach(function (entry) { els.entriesList.appendChild(createEntryCard(entry)); });
     const filtering = hasActiveFilters();
@@ -418,7 +434,7 @@
     els.emptyState.hidden = filtered.length !== 0;
     if (filtered.length === 0) {
       els.emptyTitle.textContent = filtering ? "No matching entries" : "No journal entries found";
-      els.emptyMessage.textContent = filtering ? "Try changing your search or date range." : "This backup did not contain recognizable journal entries.";
+      els.emptyMessage.textContent = filtering ? "Try changing your search, date range, or tag." : "This backup did not contain recognizable journal entries.";
     }
   }
 
@@ -426,12 +442,14 @@
     const query = els.searchInput.value.trim().toLocaleLowerCase();
     const from = els.dateFromInput.value ? dateInputDay(els.dateFromInput.value) : null;
     const to = els.dateToInput.value ? dateInputDay(els.dateToInput.value) : null;
+    const tag = els.tagSelect.value;
     const entries = state.entries.filter(function (entry) {
       if (query && !(entry.title + "\n" + entry.text).toLocaleLowerCase().includes(query)) return false;
-      if (!from && !to) return true;
+      if (tag && !entry.tagList.includes(tag)) return false;
+      if (from === null && to === null) return true;
       if (!entry.date) return false;
-      const day = Date.UTC(entry.date.getFullYear(), entry.date.getMonth(), entry.date.getDate());
-      return (!from || day >= from) && (!to || day <= to);
+      const day = entry.date.getTime();
+      return (from === null || day >= from) && (to === null || day <= to);
     }).slice();
     entries.sort(compareEntries);
     return entries;
@@ -443,7 +461,24 @@
   }
 
   function hasActiveFilters() {
-    return Boolean(els.searchInput.value.trim() || els.dateFromInput.value || els.dateToInput.value);
+    return Boolean(els.searchInput.value.trim() || els.dateFromInput.value || els.dateToInput.value || els.tagSelect.value);
+  }
+
+  function populateTagFilter() {
+    const tags = Array.from(new Set(state.entries.flatMap(function (entry) { return entry.tagList; })));
+    tags.sort(function (a, b) { return a.localeCompare(b); });
+    els.tagSelect.replaceChildren();
+    const all = document.createElement("option");
+    all.value = "";
+    all.textContent = "All tags";
+    els.tagSelect.appendChild(all);
+    tags.forEach(function (tag) {
+      const option = document.createElement("option");
+      option.value = tag;
+      option.textContent = tag;
+      els.tagSelect.appendChild(option);
+    });
+    els.tagSelect.value = "";
   }
 
   function compareEntries(a, b) {
@@ -536,10 +571,9 @@
   }
 
   function formatDate(entry) {
-    if (entry.date) return new Intl.DateTimeFormat(undefined, { dateStyle: "long", timeStyle: hasMeaningfulTime(entry.date) ? "short" : undefined }).format(entry.date);
+    if (entry.date) return new Intl.DateTimeFormat(undefined, { dateStyle: "long", timeZone: "UTC" }).format(entry.date);
     return entry.rawDate || "Date unavailable";
   }
-  function hasMeaningfulTime(date) { return date.getHours() !== 0 || date.getMinutes() !== 0 || date.getSeconds() !== 0; }
 
   function openEntry(entry, trigger) {
     state.lastFocused = trigger;
